@@ -151,11 +151,11 @@ $('backToLogin').addEventListener('click',()=>showAuthPanel('login'));
 
 async function start(){
  if(!configured){$('configNotice').classList.remove('hidden');$('loginMsg').textContent='Koneksi Supabase belum dikonfigurasi.';return}
- const recoveryLink=window.location.hash.includes('type=recovery');
- if(recoveryLink) showAuthPanel('newPassword');
+ const passwordSetupLink=window.location.hash.includes('type=recovery') || window.location.hash.includes('type=invite');
+ if(passwordSetupLink) showAuthPanel('newPassword');
  const {data:{session},error}=await sb.auth.getSession();
  if(error){msg('loginMsg','Gagal memeriksa sesi: '+error.message,true);return}
- if(recoveryLink){showAuthPanel('newPassword');return}
+ if(passwordSetupLink){showAuthPanel('newPassword');return}
  if(session) await enterApp(session.user);
 }
 async function enterApp(user){

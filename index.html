@@ -39,6 +39,19 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:
    <div class="field"><label>KATA SANDI</label><input id="password" type="password" placeholder="Kata sandi" required></div>
    <button class="btn btn-primary btn-block" type="submit">Masuk ke Saku Paguyuban</button>
   </form>
+  <button type="button" id="forgotLink" class="muted" style="border:0;background:transparent;text-decoration:underline;margin-top:12px">Lupa kata sandi?</button>
+  <form id="forgotForm" class="hidden">
+   <p class="muted">Masukkan email akunmu. Tautan pemulihan akan dikirim ke email tersebut.</p>
+   <div class="field"><label>EMAIL AKUN</label><input id="forgotEmail" type="email" placeholder="nama@email.com" required></div>
+   <button class="btn btn-primary btn-block" type="submit">Kirim tautan pemulihan</button>
+   <button class="btn btn-light btn-block" type="button" id="backToLogin">Kembali ke login</button>
+  </form>
+  <form id="newPasswordForm" class="hidden">
+   <p class="muted">Buat kata sandi baru untuk akunmu.</p>
+   <div class="field"><label>KATA SANDI BARU</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Minimal 8 karakter" required></div>
+   <div class="field"><label>ULANGI KATA SANDI BARU</label><input id="confirmNewPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Ulangi kata sandi" required></div>
+   <button class="btn btn-primary btn-block" type="submit">Simpan kata sandi baru</button>
+  </form>
   <div id="loginMsg" class="muted" style="margin-top:14px"></div>
   <p class="muted" style="margin-top:20px">Akses pengurus menggunakan akun yang dibuat melalui Supabase Auth.</p>
  </div>
@@ -126,18 +139,87 @@ function msg(id,text,error=false){$(id).innerHTML=text?`<div class="notice ${err
 function showPage(name){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('page-'+name).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===name));$('pageTitle').textContent=({beranda:'Beranda',siswa:'Data Siswa',transaksi:'Transaksi Kas',orangtua:'Cek Iuran Orang Tua'})[name]}
 document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.page)));
 document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>showPage(b.dataset.goto)));
+function showAuthPanel(panel){
+ $('loginForm').classList.toggle('hidden',panel!=='login');
+ $('forgotForm').classList.toggle('hidden',panel!=='forgot');
+ $('newPasswordForm').classList.toggle('hidden',panel!=='newPassword');
+ $('forgotLink').classList.toggle('hidden',panel!=='login');
+ msg('loginMsg','');
+}
+$('forgotLink').addEventListener('click',()=>{ $('forgotEmail').value=$('email').value; showAuthPanel('forgot'); });
+$('backToLogin').addEventListener('click',()=>showAuthPanel('login'));
+
 async function start(){
- if(!configured){$('configNotice').classList.remove('hidden');$('loginMsg').textContent='Aplikasi dapat dibuka, tetapi koneksi database belum diatur.';return}
- const {data:{session}}=await sb.auth.getSession();
+ if(!configured){$('configNotice').classList.remove('hidden');$('loginMsg').textContent='Koneksi Supabase belum dikonfigurasi.';return}
+ const recoveryLink=window.location.hash.includes('type=recovery');
+ if(recoveryLink) showAuthPanel('newPassword');
+ const {data:{session},error}=await sb.auth.getSession();
+ if(error){msg('loginMsg','Gagal memeriksa sesi: '+error.message,true);return}
+ if(recoveryLink){showAuthPanel('newPassword');return}
  if(session) await enterApp(session.user);
 }
 async function enterApp(user){
- currentUser=user;$('loginView').classList.add('hidden');$('appView').classList.remove('hidden');
- $('userLabel').textContent=user.email||'Pengurus';$('welcome').textContent='Selamat datang. Kelola kas paguyuban dengan tertib dan transparan.';
+ const {data:profile,error}=await sb.from('pengguna_aplikasi')
+  .select('nama_lengkap,peran,rombel_id,aktif')
+  .eq('auth_user_id',user.id).maybeSingle();
+ if(error){
+  await sb.auth.signOut();
+  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+  showAuthPanel('login');
+  msg('loginMsg','Akun terautentikasi, tetapi profil pengguna belum dapat dibaca. Periksa kebijakan SELECT tabel pengguna_aplikasi. Detail: '+error.message,true);
+  return;
+ }
+ if(!profile||!profile.aktif){
+  await sb.auth.signOut();
+  $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+  showAuthPanel('login');
+  msg('loginMsg','Akun belum terdaftar sebagai pengurus aktif. Hubungi administrator paguyuban.',true);
+  return;
+ }
+ currentUser=user;currentUser.profile=profile;
+ $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');
+ const nama=profile.nama_lengkap||user.email||'Pengurus';
+ const roleLabel=String(profile.peran||'').replaceAll('_',' ');
+ $('userLabel').textContent=nama+' • '+roleLabel;
+ $('welcome').textContent='Halo, '+nama+'. Selamat datang di Saku Paguyuban.';
  await loadAll();
 }
-async function leaveApp(){await sb.auth.signOut();currentUser=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden')}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();if(!sb)return;msg('loginMsg','Memeriksa akun…');const {data,error}=await sb.auth.signInWithPassword({email:$('email').value,password:$('password').value});if(error){msg('loginMsg',error.message,true);return}msg('loginMsg','');await enterApp(data.user)});
+async function leaveApp(){
+ await sb.auth.signOut();currentUser=null;
+ $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+ showAuthPanel('login');$('password').value='';
+}
+$('loginForm').addEventListener('submit',async e=>{
+ e.preventDefault();if(!sb)return;
+ msg('loginMsg','Memeriksa akun…');
+ const {data,error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});
+ if(error){msg('loginMsg','Login gagal. Periksa email dan kata sandi. '+error.message,true);return}
+ msg('loginMsg','');await enterApp(data.user);
+});
+$('forgotForm').addEventListener('submit',async e=>{
+ e.preventDefault();if(!sb)return;
+ const email=$('forgotEmail').value.trim();
+ msg('loginMsg','Mengirim tautan pemulihan…');
+ const redirectTo=window.location.origin+window.location.pathname;
+ const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo});
+ if(error){msg('loginMsg','Tautan pemulihan belum dapat dikirim: '+error.message,true);return}
+ msg('loginMsg','Jika email terdaftar, tautan pemulihan akan dikirim. Periksa kotak masuk dan folder spam.');
+});
+$('newPasswordForm').addEventListener('submit',async e=>{
+ e.preventDefault();if(!sb)return;
+ const password=$('newPassword').value;
+ if(password.length<8){msg('loginMsg','Kata sandi minimal 8 karakter.',true);return}
+ if(password!==$('confirmNewPassword').value){msg('loginMsg','Konfirmasi kata sandi tidak sama.',true);return}
+ msg('loginMsg','Menyimpan kata sandi baru…');
+ const {error}=await sb.auth.updateUser({password});
+ if(error){msg('loginMsg','Gagal memperbarui kata sandi: '+error.message,true);return}
+ await sb.auth.signOut();
+ currentUser=null;
+ history.replaceState(null,document.title,window.location.pathname);
+ $('newPasswordForm').reset();
+ showAuthPanel('login');
+ msg('loginMsg','Kata sandi berhasil diperbarui. Silakan login menggunakan kata sandi baru.');
+});
 $('logoutBtn').addEventListener('click',leaveApp);
 $('refreshBtn').addEventListener('click',loadAll);
 async function fetchRows(table,select='*',order=null){let q=sb.from(table).select(select);if(order)q=q.order(order,{ascending:false});return await q}
@@ -193,7 +275,12 @@ $('parentForm').addEventListener('submit',async e=>{
  const s=data.siswa,rows=data.riwayat||[];
  $('parentResult').innerHTML=`<div class="panel" style="margin-top:18px"><h3>${esc(s.nama_siswa)}</h3><p class="muted">Rombel saat ini: ${esc(s.nama_rombel||'-')}</p><div class="pill">Status: ${s.status_aktif?'Anggota aktif':'Tidak aktif'}</div><h3 style="margin-top:20px">Riwayat Pembayaran Iuran</h3>${rows.length?`<table><thead><tr><th>Tanggal</th><th>Jumlah</th><th>Keterangan</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.tanggal)}</td><td>${money(x.jumlah)}</td><td>${esc(x.keterangan||'Iuran')}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Belum ada pembayaran yang tercatat.</p>'}</div>`;
 });
-sb?.auth.onAuthStateChange((_event,session)=>{if(!session&&currentUser){currentUser=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden')}});
+sb?.auth.onAuthStateChange((event,session)=>{
+ if(event==='PASSWORD_RECOVERY'){showAuthPanel('newPassword');}
+ if(event==='SIGNED_OUT'&&currentUser){
+  currentUser=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden');showAuthPanel('login');
+ }
+});
 start();
 </script>
 </body></html>
